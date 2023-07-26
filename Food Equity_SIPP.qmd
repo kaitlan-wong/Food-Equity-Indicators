@@ -1,0 +1,98 @@
+---
+title: "Potential Food Equity Indicator using SIPP Data"
+author: "Kaitlan Wong"
+format: html
+editor: visual
+---
+
+```{r setup, include=FALSE}
+#Load the "data.table", "dplyr", and "bit64" libraries
+library(data.table)
+library(bit64)
+library(dplyr)
+```
+
+This code loads in both the primary data file and the calendar-year replicate weights file (as opposed to the longitudinal replicate weights). These files are separate downloads on the SIPP website: <https://www.census.gov/programs-surveys/sipp/data/datasets/2022-data/2022.html>
+
+SIPP data are in person-month format, meaning each record represents one month for a specific person. Unique persons are identified using SSUID + PNUM. Unique households are identified using SSUID + ERESIDENCEID. For additional guidance on using SIPP data, see the SIPP Users' Guide at <https://www.census.gov/programs-surveys/sipp/guidance/users-guide.html>
+
+Note the 'select' statement in the first use of fread(). Most machines do not have enough memory to read the entire SIPP file into memory. Use a 'select' statement to read in only the columns you are interested in using. If you still encounter an out-of-memory error, you must select less columns or less observations.
+
+[**Food variable definitions:**]{.underline}
+
+-   EFOOD1: The food you bought did not last?
+
+-   EFOOD2: Could not afford balanced meals?
+
+-   EFOOD3: In 2021, did you ever cut the size of your meals or skip meals because there wasn't enough money for food?
+
+-   EFOOD5: In 2021, did you ever eat less than you felt you should because there wasn't enough money to buy food.
+
+-   EFOOD6: In 2021, were you ever hungry but didn't eat because there wasn't enough money for food?
+
+See full code book here: [https://www.census.gov/data-tools/demo/uccb/sippdict?s_keyword=food&s_year=2022 ](https://www.census.gov/data-tools/demo/uccb/sippdict?s_keyword=food&s_year=2022 )
+
+```{r}
+#Read in the Primary Data file. Choose only the variables you want to read in in order to save on memory.
+ds <- c("pu2022.csv")
+pu <- fread(ds, sep = "|", select = c(
+   #Common case identification variables
+  'SSUID','PNUM','MONTHCODE','ERESIDENCEID','ERELRPE','SPANEL','SWAVE',
+  
+  #The base weight
+  'WPFINWGT',
+  
+  # Deatiled race and Hispanic origin variables
+ 'TRACE','EORIGIN',
+ 
+  # State of residence variable (State of residence for the interview address)
+  'TST_INTV',
+  
+  #Example additional variables for analysis
+  'EFOOD1','EFOOD2','EFOOD3','EFOOD5'))
+```
+
+```{r}
+#Make sure all the column names are upper-case
+names(pu) <- toupper(names(pu))
+
+```
+
+```{r}
+#Preview the data
+head(pu, 20)
+```
+
+```{r}
+#check some means against the validation xls file to help ensure that the data
+#	were read in correctly. Note that the validation xls files do not include all variables.
+mean(pu[["TPTOTINC"]], na.rm = TRUE)
+```
+
+```{r}
+#Read in the replicate-weight data. This dataset is small enough that most machines
+#	can read the whole file into memory
+dw <- c("rw2022.csv")
+rw <- fread(dw, sep = "|")
+```
+
+```{r}
+#Make sure all the column names are upper-case
+names(rw) <- toupper(names(rw))
+
+#Preview the data
+head(rw, 20)
+```
+
+```{r}
+#check some means against the validation xls file to help ensure that the data
+#	were read in correctly. Note that the validation xls files do not include all variables.
+mean(rw[["REPWGT100"]], na.rm = TRUE)
+
+#Merge primary data and replicate weights on SSUID, PNUM, MONTHCODE, SPANEL, and SWAVE
+data <- inner_join(pu, rw, by = c("SSUID","PNUM","MONTHCODE", "SPANEL", "SWAVE"))
+
+
+#preview the merged data
+head(data, 20)
+```
