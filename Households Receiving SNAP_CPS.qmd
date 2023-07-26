@@ -1,0 +1,67 @@
+---
+title: "Households Receiving SNAP_CPS"
+author: "Kaitlan Wong"
+format: html
+editor: visual
+---
+
+```{r setup, include=FALSE}
+library(ipumsr)
+library(dplyr)
+library(tidyverse)
+library(readxl) 
+library(writexl)
+```
+
+```{r}
+#Read in CPS data from IPUMS
+
+ddi <- read_ipums_ddi("cps_00006.xml")
+data <- read_ipums_micro("cps_00006.xml", data_file = ("cps_00006.dat.gz"), verbose = FALSE)
+```
+
+```{r}
+# Filter for Dallas County FIPS code
+cps_data <- data %>%
+  filter(COUNTY == 4819100) %>% # comes back with 0 observations. Same thing happens when I filter using metropolitan area.
+  # recode race/ethnicity
+  mutate(race_eth = case_when(
+    HISPAN != 000 ~ "Hispanic",
+    HISPAN == 000 & RACE == 100 ~ "White, non-Hispanic",
+    HISPAN == 000 & RACE == 200 ~ "Black, non-Hispanic",
+    HISPAN == 000 & RACE == 300 ~ "AIAN, non-Hispanic",
+    HISPAN == 000 & RACE %in% c(650,651,652) ~ "Asian or Pacific Islander, non-Hispanic",
+    HISPAN == 000 & RACE %in% c(700,801:820,830) ~ "Other, non-Hispanic",
+    TRUE ~ NA_character_)
+  ) %>%
+  # recode SNAP variable
+  mutate(snap = case_when(
+    FOODSTMP == 2 ~ "Yes",
+    FOODSTMP == 1 ~ "No",
+    FOODSTMP == 0 ~ "NIU")
+   )
+```
+
+Create table of counts and %s using household weight variable.
+
+```{r}
+# Calculate # and % of households that receive SNAP payments by race/ethnicity of householder
+summary <- cps_data %>%
+  group_by(YEAR, race_eth) %>%
+  summarize(
+    count = sum(ASECWTH[snap == "Yes"], na.rm = TRUE),
+    prop = sum(ASECWTH[snap == "Yes"], na.rm = TRUE) / sum(ASECWTH)
+  )
+
+summary
+
+
+# Calculate total # and % of households that receive SNAP payments
+summary_all <- cps_data %>%
+  summarize(
+    count = sum(ASECWTH[snap == "Yes"], na.rm = TRUE),
+    prop = sum(ASECWTH[snap == "Yes"], na.rm = TRUE) / sum(ASECWTH, na.rm = TRUE)
+  )
+
+summary_all # comes back with 0 observations. Same thing happens when I filter using metropolitan area.
+```
