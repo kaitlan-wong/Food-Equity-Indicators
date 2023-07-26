@@ -1,0 +1,411 @@
+---
+title: "Potential Food Equity Indicators using Current Population Survey Food Security Suuplement - 2021"
+author: "Kaitlan Wong"
+format: html
+editor: visual
+---
+
+```{r}
+setwd("C:/Users/kaitl/Documents/Every Texan/R/Dallas Equity Indicators 2023/CPS_Food Security")
+```
+
+```{r setup, include=FALSE}
+library(data.table)
+library(bit64)
+library(dplyr)
+library(writexl)
+```
+
+Data downloaded here: <https://www.census.gov/data/datasets/time-series/demo/cps/cps-supp_cps-repwgt/cps-food-security.2021.html#list-tab-216513607>
+
+See 2021 technical documentation here: <https://www2.census.gov/programs-surveys/cps/techdocs/cpsdec21.pdf>
+
+**Variables by Survey Question:**
+
+-   **HES8B**: In order to buy just enough food to meet (your needs/the needs of your household), would you need to spend more than you do now, or could you spend less?
+
+-   **HES9**: People do different things when they are running out of money for food in order to make their food or their food money go further. In the last 12 months, since December of last year, did you ever run short of money and try to make your food or your food money go further?
+
+-   **HESP1**: In the past 12 months, since December of last year, did (you/anyone in this household) get SNAP/Supplemental Nutrition Assistance Program or food stamp benefits?
+
+-   **HESS1**: Which of these statements best describes the food eaten in your household \-- enough of the kinds of food (I/we) want to eat, enough but not always the kinds of food (I/we) want to eat, sometimes not enough to eat, or often not enough to eat?
+
+-   **HESS2**: (I/We) worried whether (my/our) food would run out before (I/we) got money to buy more. Was that OFTEN true, SOMETIMES true, or NEVER true for (you/your household) in the last 12 months?
+
+-   **HESS3**: The food that (I/we) bought just didn't last, and (I/we) didn't have money to get more. Was that OFTEN, SOMETIMES, or NEVER true for (you/your household) in the last 12 months?
+
+-   **HESS4**: (I/we) couldn't afford to eat balanced meals. Was that OFTEN, SOMETIMES, or NEVER true for (you/your household) in the last 12 months?
+
+-   **HESH2**: In the last 12 months did (you/you or other adults in your household) ever cut the size of your meals or skip meals because there wasn't enough money for food?
+
+-   **HESH3**: In the last 12 months, did you ever eat less than you felt you should because there wasn't enough money for food?
+
+-   **HRFS12M1**: Summary Food Security Status, 12-Month Recall (Recode of HRFS12M4) (1 Food Secure High or Marginal Food Security, 2 Low Food Security, 3 Very Low Food Security, -9 No Response)
+
+-   **HRFS12MD**: Detailed Food Security Status, 12-Month Recall (Recode of HRFS12M4) (1 High Food Security, 2 Marginal Food Security, 3 Low Food Security, 4 Very Low Food Security, -9 No Response)
+
+```{r}
+#Read in the data file. Choose only the variables you want to read in in order to save on memory.
+all_data <- c("dec21pub.csv")
+food_data <- fread(all_data, sep = ",", select = c(
+   #Common case identification variables
+  'HRHHID','HRYEAR4','HRHHID2',
+  
+  #Household weight
+  'HWHHWGT', # All weight variables have four implied decimal places in the data file (the decimal point is not included). Divide the weight variables by 10,000 for analysis in units or by 10,000,000 for analysis in thousands of persons or thousands of households. 
+  
+  #Person weight
+  'PWSSWGT',
+  
+  # Race and Hispanic origin variables
+  'PTDTRACE','PEHSPNON',
+ 
+  # State, county, and MSA FIPS code variables
+  'GESTFIPS', 'GTCO', 'GTCBSA',
+  
+  # Individual Principal City (gets specific city within MSA. Dallas = 1)
+  'GTINDVPC',
+  
+  #Food security variables for analysis
+  'HES8B','HES9','HESP1','HESS1','HESS2','HESS3','HESS4','HESH2','HESH3','HRFS12M1','HRFS12MD'))
+```
+
+Per page 17-9 of the [2021 Technical Documentation](https://www2.census.gov/programs-surveys/cps/techdocs/cpsdec21.pdf) , "All weight variables have four implied decimal places in the data file (the decimal point is not included). **Divide the weight variables by 10,000 for analysis in units** or by 10,000,000 for analysis in thousands of persons or thousands of households."
+
+```{r}
+# Divide the household weight variable by 10,000
+food_data$HWHHWGT <- food_data$HWHHWGT / 10000
+```
+
+```{r}
+#Make sure all the column names are upper-case
+names(food_data) <- toupper(names(food_data))
+
+```
+
+```{r}
+#Preview the data
+head(food_data, 20)
+```
+
+```{r}
+# Convert race and Hispanic origin variables to numeric
+food_data$PEHSPNON <- as.numeric(food_data$PEHSPNON)
+food_data$PEHSPNON <- as.numeric(food_data$PTDTRACE)
+
+# Filter for Dallas-Fort Worth-Arlington MSA (County FIPS Code is 113, it is not included in dataset)
+dallas_data <- food_data %>%
+  filter(GESTFIPS == 48, # Texas FIPS
+         GTCBSA == 19100, # Dallas-Fort Worth-Arlington MSA FIPS
+         GTINDVPC == 1) %>% # Dallas Principal City Selection 
+  # recode race/ethnicity
+  mutate(race_eth = case_when(
+    PEHSPNON != 2 ~ "Hispanic",
+    PEHSPNON == 2 & PTDTRACE == 01 ~ "White, non-Hispanic",
+    PEHSPNON == 2 & PTDTRACE == 02 ~ "Black, non-Hispanic",
+    PEHSPNON == 2 & PTDTRACE == 03 ~ "AIAN, non-Hispanic",
+    PEHSPNON == 2 & PTDTRACE %in% c(04,05) ~ "Asian or Pacific Islander, non-Hispanic",
+    PEHSPNON == 2 & PTDTRACE %in% c(06:26) ~ "Other, non-Hispanic",
+    TRUE ~ NA_character_)
+  ) %>%
+  
+  # recode food security variables
+  
+  #In order to buy just enough food to meet (your needs/the needs of your household), would you need to spend more than you do now, or could you spend less?
+  mutate(food1 = case_when(
+    HES8B == 1 ~ "More",
+    HES8B == 2 ~ "Less",
+    HES8B == 3 ~ "Same",
+    TRUE ~ "NA")
+   ) %>%
+  #People do different things when they are running out of money for food in order to make their food or their food money go further. In the last 12 months, since December of last year, did you ever run short of money and try to make your food or your food money go further?
+  mutate(food2 = case_when(
+    HES9 == 1 ~ "Yes",
+    HES9 == 2 ~ "No",
+    TRUE ~ "NA")
+   ) %>%
+  #In the past 12 months, since December of last year, did (you/anyone in this household) get SNAP/Supplemental Nutrition Assistance Program or food stamp benefits?
+  mutate(food3 = case_when(
+    HESP1 == 1 ~ "Yes",
+    HESP1 == 2 ~ "No",
+    TRUE ~ "NA")
+   ) %>%
+  #Which of these statements best describes the food eaten in your household -- enough of the kinds of food (I/we) want to eat, enough but not always the kinds of food (I/we) want to eat, sometimes not enough to eat, or often not enough to eat?
+  mutate(food4 = case_when(
+    HESS1 %in% c(1:2) ~ "Enough",
+    HESS1 %in% c(3:4) ~ "Not always enough",
+    TRUE ~ "NA")
+   ) %>%
+  #HESS2: (I/We) worried whether (my/our) food would run out before (I/we) got money to buy more. Was that OFTEN true, SOMETIMES true, or NEVER true for (you/your household) in the last 12 months? (Recoding to: I have worried whether food would run out)
+  mutate(food5 = case_when(
+    HESS2 %in% c(1:2) ~ "True",
+    HESS2 == 3 ~ "False",
+    TRUE ~ "NA")
+   ) %>%
+  #HESS3: The food that (I/we) bought just didn't last, and (I/we) didn't have money to get more. Was that OFTEN, SOMETIMES, or NEVER true for (you/your household) in the last 12 months? (Recoding to: There was a time when food didn't last)
+  mutate(food6 = case_when(
+    HESS3 %in% c(1:2) ~ "True",
+    HESS3 == 3 ~ "False",
+    TRUE ~ "NA")
+   ) %>%
+  #HESS4: (I/we) couldn't afford to eat balanced meals. Was that OFTEN, SOMETIMES, or NEVER true for (you/your household) in the last 12 months? (Recoding to: There was a time when we couldn't afford to eat a balanced meal)
+  mutate(food7 = case_when(
+    HESS4 %in% c(1:2) ~ "True",
+    HESS4 == 3 ~ "False",
+    TRUE ~ "NA")
+   ) %>%
+  #HESH2: In the last 12 months did (you/you or other adults in your household) ever cut the size of your meals or skip meals because there wasn't enough money for food?
+  mutate(food8 = case_when(
+    HESH2 == 1 ~ "Yes",
+    HESH2 == 2 ~ "No",
+    TRUE ~ "NA")
+   ) %>%
+  #HESH3: In the last 12 months, did you ever eat less than you felt you should because there wasn't enough money for food?
+  mutate(food9 = case_when(
+    HESH3 == 1 ~ "Yes",
+    HESH3 == 2 ~ "No",
+    TRUE ~ "NA")
+   ) %>%
+  #HRFS12M1: Summary Food Security Status, 12-Month Recall (Recode of HRFS12M4) (1 Food Secure High or Marginal Food Security, 2 Low Food Security, 3 Very Low Food Security, -9 No Response) (Recoding to: Is this household food secure?)
+  mutate(food10 = case_when(
+    HRFS12M1 == 1 ~ "Food Secure High or Marginal Food Security",
+    HRFS12M1 %in% c(2:3) ~ "Food Insecure",
+    TRUE ~ "NA")
+   )
+
+```
+
+```{r}
+#Preview Dallas data
+head(dallas_data)
+```
+
+Create table of counts and %s using household weight variable.
+
+```{r}
+# Calculate # and % of households who need to spend more money on food to meet needs by race/ethnicity
+food1_summary <- dallas_data %>%
+  group_by(race_eth) %>%
+  summarize(
+    count = sum(HWHHWGT[food1 == "More"], na.rm = TRUE),
+    prop = sum(HWHHWGT[food1 == "More"], na.rm = TRUE) / sum(HWHHWGT)
+  )
+
+food1_summary
+
+
+# Calculate # and % of households who need to spend more money on food to meet needs
+food1_summary_all <- dallas_data %>%
+  summarize(
+    count = sum(HWHHWGT[food1 == "More"], na.rm = TRUE),
+    prop = sum(HWHHWGT[food1 == "More"], na.rm = TRUE) / sum(HWHHWGT, na.rm = TRUE)
+  )
+
+food1_summary_all
+```
+
+```{r}
+# Calculate # and % of households that ever ran short of money and tried to make  food or food money go further, by race/ethnicity
+food2_summary <- dallas_data %>%
+  group_by(race_eth) %>%
+  summarize(
+    count = sum(HWHHWGT[food2 == "Yes"], na.rm = TRUE),
+    prop = sum(HWHHWGT[food2 == "Yes"], na.rm = TRUE) / sum(HWHHWGT)
+  )
+
+food2_summary
+
+
+# Calculate # and % of households that ever ran short of money and tried to make  food or food money go further
+food2_summary_all <- dallas_data %>%
+  summarize(
+    count = sum(HWHHWGT[food2 == "Yes"], na.rm = TRUE),
+    prop = sum(HWHHWGT[food2 == "Yes"], na.rm = TRUE) / sum(HWHHWGT, na.rm = TRUE)
+  )
+
+food2_summary_all
+```
+
+```{r}
+# Calculate # and % of households that received SNAP/Supplemental Nutrition Assistance Program or food stamp benefits, by race/ethnicity
+food3_summary <- dallas_data %>%
+  group_by(race_eth) %>%
+  summarize(
+    count = sum(HWHHWGT[food3 == "Yes"], na.rm = TRUE),
+    prop = sum(HWHHWGT[food3 == "Yes"], na.rm = TRUE) / sum(HWHHWGT)
+  )
+
+food3_summary
+
+
+# Calculate # and % of households that received SNAP/Supplemental Nutrition Assistance Program or food stamp benefits
+food3_summary_all <- dallas_data %>%
+  summarize(
+    count = sum(HWHHWGT[food3 == "Yes"], na.rm = TRUE),
+    prop = sum(HWHHWGT[food3 == "Yes"], na.rm = TRUE) / sum(HWHHWGT, na.rm = TRUE)
+  )
+
+food3_summary_all
+```
+
+```{r}
+# Calculate # and % of households that did not always have enough to eat, by race/ethnicity
+food4_summary <- dallas_data %>%
+  group_by(race_eth) %>%
+  summarize(
+    count = sum(HWHHWGT[food4 == "Not always enough"], na.rm = TRUE),
+    prop = sum(HWHHWGT[food4 == "Not always enough"], na.rm = TRUE) / sum(HWHHWGT)
+  )
+
+food4_summary
+
+
+# Calculate # and % of households that did not always have enough to eat
+food4_summary_all <- dallas_data %>%
+  summarize(
+    count = sum(HWHHWGT[food4 == "Not always enough"], na.rm = TRUE),
+    prop = sum(HWHHWGT[food4 == "Not always enough"], na.rm = TRUE) / sum(HWHHWGT, na.rm = TRUE)
+  )
+
+food4_summary_all
+```
+
+```{r}
+# Calculate # and % of households that worried whether food would run out before they got money to buy more, by race/ethnicity
+food5_summary <- dallas_data %>%
+  group_by(race_eth) %>%
+  summarize(
+    count = sum(HWHHWGT[food5 == "True"], na.rm = TRUE),
+    prop = sum(HWHHWGT[food5 == "True"], na.rm = TRUE) / sum(HWHHWGT)
+  )
+
+food5_summary
+
+
+# Calculate # and % of households that worried whether food would run out before they got money to buy more
+food5_summary_all <- dallas_data %>%
+  summarize(
+    count = sum(HWHHWGT[food5 == "True"], na.rm = TRUE),
+    prop = sum(HWHHWGT[food5 == "True"], na.rm = TRUE) / sum(HWHHWGT, na.rm = TRUE)
+  )
+
+food5_summary_all
+```
+
+```{r}
+# Calculate # and % of households that reported that the food that bought just didn't last and didn't have money to get more, by race/ethnicity
+food6_summary <- dallas_data %>%
+  group_by(race_eth) %>%
+  summarize(
+    count = sum(HWHHWGT[food6 == "True"], na.rm = TRUE),
+    prop = sum(HWHHWGT[food6 == "True"], na.rm = TRUE) / sum(HWHHWGT)
+  )
+
+food6_summary
+
+
+# Calculate # and % of households that reported that the food that bought just didn't last and didn't have money to get more
+food6_summary_all <- dallas_data %>%
+  summarize(
+    count = sum(HWHHWGT[food6 == "True"], na.rm = TRUE),
+    prop = sum(HWHHWGT[food6 == "True"], na.rm = TRUE) / sum(HWHHWGT, na.rm = TRUE)
+  )
+
+food6_summary_all
+```
+
+```{r}
+# Calculate # and % of households that couldn't afford to eat balanced meals, by race/ethnicity
+food7_summary <- dallas_data %>%
+  group_by(race_eth) %>%
+  summarize(
+    count = sum(HWHHWGT[food7 == "True"], na.rm = TRUE),
+    prop = sum(HWHHWGT[food7 == "True"], na.rm = TRUE) / sum(HWHHWGT)
+  )
+
+food7_summary
+
+
+# Calculate # and % of households that couldn't afford to eat balanced meals
+food7_summary_all <- dallas_data %>%
+  summarize(
+    count = sum(HWHHWGT[food7 == "True"], na.rm = TRUE),
+    prop = sum(HWHHWGT[food7 == "True"], na.rm = TRUE) / sum(HWHHWGT, na.rm = TRUE)
+  )
+
+food7_summary_all
+```
+
+```{r}
+# Calculate # and % of households that ever cut the size of meals or skipped meals because there wasn't enough money for food, by race/ethnicity
+food8_summary <- dallas_data %>%
+  group_by(race_eth) %>%
+  summarize(
+    count = sum(HWHHWGT[food8 == "Yes"], na.rm = TRUE),
+    prop = sum(HWHHWGT[food8 == "Yes"], na.rm = TRUE) / sum(HWHHWGT)
+  )
+
+food8_summary
+
+
+# Calculate # and % of households that ever cut the size of meals or skipped meals because there wasn't enough money for food
+food8_summary_all <- dallas_data %>%
+  summarize(
+    count = sum(HWHHWGT[food8 == "Yes"], na.rm = TRUE),
+    prop = sum(HWHHWGT[food8 == "Yes"], na.rm = TRUE) / sum(HWHHWGT, na.rm = TRUE)
+  )
+
+food8_summary_all
+```
+
+```{r}
+# Calculate # and % of households that ever ate less than they felt they should because there wasn't enough money for food, by race/ethnicity
+food9_summary <- dallas_data %>%
+  group_by(race_eth) %>%
+  summarize(
+    count = sum(HWHHWGT[food9 == "Yes"], na.rm = TRUE),
+    prop = sum(HWHHWGT[food9 == "Yes"], na.rm = TRUE) / sum(HWHHWGT)
+  )
+
+food9_summary
+
+
+# Calculate # and % of households that ever ate less than they felt they should because there wasn't enough money for food
+food9_summary_all <- dallas_data %>%
+  summarize(
+    count = sum(HWHHWGT[food9 == "Yes"], na.rm = TRUE),
+    prop = sum(HWHHWGT[food9 == "Yes"], na.rm = TRUE) / sum(HWHHWGT, na.rm = TRUE)
+  )
+
+food9_summary_all
+```
+
+```{r}
+# Calculate # and % of households that are food insecure, by race/ethnicity
+food10_summary <- dallas_data %>%
+  group_by(race_eth) %>%
+  summarize(
+    count = sum(HWHHWGT[food10 == "Food Insecure"], na.rm = TRUE),
+    prop = sum(HWHHWGT[food10 == "Food Insecure"], na.rm = TRUE) / sum(HWHHWGT)
+  )
+
+food10_summary
+
+
+# Calculate # and % of households that are food insecure
+food10_summary_all <- dallas_data %>%
+  summarize(
+    count = sum(HWHHWGT[food10 == "Food Insecure"], na.rm = TRUE),
+    prop = sum(HWHHWGT[food10 == "Food Insecure"], na.rm = TRUE) / sum(HWHHWGT, na.rm = TRUE)
+  )
+
+food10_summary_all
+```
+
+```{r}
+# Export tables to Excel
+
+write_xlsx(list("Food Insecure" = food10_summary, "Spending" = food1_summary, "Make Food Last" = food2_summary, "SNAP" = food3_summary, "Enough Food" = food4_summary, "Worried Food Ran Out" = food5_summary, "Food Ran Out" = food6_summary, "Balanced Meals" = food7_summary, "Adults Skipped Meals" = food8_summary, "Ate Less" = food9_summary), "Food Security_2021_CPS Food Security Supplement.xlsx")
+
+
+```
