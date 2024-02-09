@@ -1,2 +1,2 @@
 # Food-Equity-Indicators
-Potential food equity indicators for the 2023 Dallas Equity Indicators report.
+Different food equity indicators for Dallas, Texas.
